@@ -135,10 +135,12 @@ class DuelBot:
                 self.target_entity = self.bot.nearestEntity()
                 self.startAttack()
 
-        @On(self.bot, 'entityDead')
+        @On(self.bot, 'entitySpawn')
         def handle_entity_dead(this, entity):
-            print("entityDead")
-            print(entity.id)
+            if not self.target_mode:
+                return
+            if entity.id == self.target_entity.id:
+                self.endAttack()
 
         @On(self.bot, "end")
         def handle(*args):
@@ -191,7 +193,7 @@ class DuelBot:
         self.bot.setControlState('forward', False)
         self.bot.setControlState('sprint', False)
         if 0 <= self.botTargetIndex < len(self.duelBotList):
-            target_bot = self.duelBotList[self.botTargetIndex].bot
+            target_bot = self.duelBotList[self.botTargetIndex]
             if target_bot.target_mode:
                 target_bot.endAttack()
             self.botTargetIndex = -1
