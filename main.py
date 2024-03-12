@@ -8,20 +8,10 @@ from javascript import require, On
 mineflayer = require('mineflayer')
 pathfinder_plugin = require('mineflayer-pathfinder')
 pvp = require('mineflayer-pvp').plugin
-statemachinePluginDict = require("mineflayer-statemachine")
 pathfinder = pathfinder_plugin.pathfinder
 Movements = pathfinder.Movements
 goals = pathfinder.goals
 v = require('vec3')
-StateTransition = statemachinePluginDict.StateTransition
-BotStateMachine = statemachinePluginDict.BotStateMachine
-EntityFilters = statemachinePluginDict.EntityFilters
-BehaviorFollowEntity = statemachinePluginDict.BehaviorFollowEntity
-BehaviorLookAtEntity = statemachinePluginDict.BehaviorLookAtEntity
-BehaviorGetClosestEntity = statemachinePluginDict.BehaviorGetClosestEntity
-NestedStateMachine = statemachinePluginDict.NestedStateMachine
-StateBehaviour = statemachinePluginDict.StateBehaviour
-AttackState =
 
 RANGE_GOAL = 1
 BOT_USERNAME = 'python'
@@ -59,24 +49,24 @@ def getAttackLookPosition(target_entity):
         x_difference = target_position.x - bot_position.x
         y_difference = target_position.y - bot_position.y
         z_difference = target_position.z - bot_position.z
-        if y_difference < eye_height:
+        if y_difference < eye_height - hitbox_height:
             look_y = target_position.y + hitbox_height
-        elif y_difference > hitbox_height - eye_height:
+        elif y_difference > eye_height:
             look_y = target_position.y
         else:
             look_y = bot_position.y + eye_height
 
-        if x_difference < half_player_width:
-            look_x = target_position.x - half_player_width
-        elif x_difference > half_player_width:
+        if x_difference < -half_player_width:
             look_x = target_position.x + half_player_width
+        elif x_difference > half_player_width:
+            look_x = target_position.x - half_player_width
         else:
             look_x = bot_position.x
 
-        if z_difference < half_player_width:
-            look_z = target_position.z - half_player_width
-        elif z_difference > half_player_width:
+        if z_difference < -2 * half_player_width:
             look_z = target_position.z + half_player_width
+        elif z_difference > half_player_width:
+            look_z = target_position.z - half_player_width
         else:
             look_z = bot_position.z
         return v(look_x, look_y, look_z)
@@ -84,37 +74,56 @@ def getAttackLookPosition(target_entity):
 
 def face(target_entity):
     position = getAttackLookPosition(target_entity)
-    bot.lookAt(position, [True])
+    bot.lookAt(position, True)
+
+
+def endAttack():
+    print("endAttack")
+    global target_mode
+    global bot
+    target_mode = False
+    bot.setControlState('forward', False)
+    bot.setControlState('sprint', False)
 
 
 @On(bot, 'spawn')
 def handle(*args):
+    global target_mode
     print("I spawned 👋")
     movements = pathfinder.Movements(bot)
+    endAttack()
 
-    @On(bot, 'chat')
-    def handle_msg(this, sender, message, *args):
-        if message == 'fight':
-            global target_entity
-            target_entity = bot.players[sender].entity
-            startAttack()
-            print("Attacke gestartet")
-        elif message == 'stop':
-            global target_mode
-            target_mode = False
-            print("stop")
 
-    @On(bot, 'entityHurt')
-    def handle_entity_hurt(this, entity):
-        print(entity.id)
-        print(bot.entity.id)
-        if entity.id == bot.entity.id:
-            global target_entity
-            target_entity = bot.nearestEntity()
-            startAttack()
+@On(bot, 'chat')
+def handle_msg(this, sender, message, *args):
+    global target_entity
+    global target_mode
+    if message == 'fight':
+        target_entity = bot.players[sender].entity
+        startAttack()
+    elif message == 'stop':
+        endAttack()
 
-    def printHitDistance():
-        return str(getDistance(bot.entity.position, bot.nearestEntity().position))
+
+@On(bot, 'entityHurt')
+def handle_entity_hurt(this, entity):
+    global target_entity
+    if entity.id == bot.entity.id:
+        target_entity = bot.nearestEntity()
+        startAttack()
+
+
+@On(bot, 'entityDeath')
+def handle_entity_dead(this, entity):
+    global target_entity
+    print(target_entity.id)
+    print(entity.id)
+    if entity.id == target_entity.id:
+        endAttack()
+
+
+def printHitDistance():
+    return str(getDistance(bot.entity.position, bot.nearestEntity().position))
 
 
 @On(bot, "end")
@@ -143,42 +152,88 @@ def punch():
 
 def attackCycle():
     global target_mode
-    target_mode = True
     global target_entity
-    while target_mode:
-        global target_entity
+    while target_mode and bot.entities[target_entity.id] is not None:
         face(target_entity)
         punch()
         time.sleep(0.05)
+    if target_mode:
+        endAttack()
 
 
 def startAttack():
     global target_mode
+    global thread
     if target_mode:
         return
-    global thread
-    thread = threading.Thread(target=attackCycle())
+    target_mode = True
+    bot.setControlState('forward', True)
+    bot.setControlState('sprint', True)
+    thread = threading.Thread(target=attackCycle)
     thread.start()
-    return
 
 
-# Define the state class
-class AttackState(StateBehaviour):
-    def __init__(self, bot):
-        self.bot = bot
-        self.active = False
-        self.state_name = 'AttackState'
-
-    def on_state_entered(self):
-        print(f"{self.bot.username} has entered the {self.state_name} state.")
-        attackCycle()
+def startDiggingIfCan(bot):
+    block_at_cursor = bot.blockAtCursor
+    if bot.canDig(block_at_cursor):
+        bot.dig(block_at_cursor, 'ignore')
 
 
-    def on_state_exited(self):
-        print(f"{self.bot.username} has left the {self.state_name} state.")
+class ActionState:
+    walk_forwards = False
+    walk_left = False
+    walk_backwards = False
+    walk_right = False
+    jump = False
+    sneak = False
+    sprint = False
+    facing_yaw_change = 0.0
+    facing_pitch_change = 0.0
+    left_click = False
+    old_left_click = False
+    right_click = False
+    old_right_click = False
+    slot = 0
+    old_slot = 0
 
-
-
-
-
-
+    def executeTimeStep(self, bot):
+        bot.setControlState('forward', self.walk_forwards)
+        bot.setControlState('left', self.walk_left)
+        bot.setControlState('backward', self.walk_backwards)
+        bot.setControlState('right', self.walk_right)
+        bot.setControlState('jump', self.jump)
+        bot.setControlState('sneak', self.sneak)
+        bot.setControlState('sprint', self.sprint)
+        yaw_change = bot.entity.yaw + self.facing_yaw_change
+        pitch_change = bot.entity.pitch + self.facing_pitch_change
+        bot.look(yaw_change, pitch_change)
+        bot.setQuickBarSlot(self.slot)
+        if self.left_click:
+            bot.swingArm()
+            if not self.old_left_click:
+                self.old_left_click = True
+                entity = bot.entityAtCursor(3.5)
+                if entity is not None:
+                    bot.attack(entity, False)
+                else:
+                    startDiggingIfCan(bot)
+            else:
+                if bot.targetDigBlock is not None:
+                    bot.stopDigging()
+                bot.startDiggingIfCan(bot)
+        else:
+            if self.old_left_click:
+                self.old_left_click = False
+                if bot.targetDigBlock is not None:
+                    bot.stopDigging()
+        if self.right_click:
+            if not self.old_right_click:
+                self.old_right_click = True
+                bot.activateItem()
+            elif self.old_slot != self.slot:
+                bot.activateItem()
+        else:
+            if self.old_right_click:
+                self.old_right_click = False
+                if self.old_slot == self.slot:
+                    bot.deactivateItem()
