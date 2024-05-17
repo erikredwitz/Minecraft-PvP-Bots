@@ -2,6 +2,7 @@ import math
 import sys
 import threading
 import time
+import random
 
 from javascript import require, On
 
@@ -12,8 +13,6 @@ pathfinder = pathfinder_plugin.pathfinder
 Movements = pathfinder.Movements
 goals = pathfinder.goals
 v = require('vec3')
-
-
 
 
 class ActionState:
@@ -89,14 +88,32 @@ def getDistance(tdv1, tdv2):
     return math.sqrt(x ** 2 + y ** 2 + z ** 2)
 
 
+def getDifference(tdv1, tdv2):
+    x = tdv1.x - tdv2.x
+    y = tdv1.y - tdv2.y
+    z = tdv1.z - tdv2.z
+    return v(x, y, z)
+
+
+def sumVec(tdv1, tdv2):
+    x = tdv1.x + tdv2.x
+    y = tdv1.y + tdv2.y
+    z = tdv1.z + tdv2.z
+    return v(x, y, z)
+
+
 def getLength(three_dim_vector):
     return math.sqrt(three_dim_vector.x ** 2 + three_dim_vector.y ** 2 + three_dim_vector.z ** 2)
+
+
+def isVecZero(vec):
+    return vec.x == 0, vec.y == 0, vec.z == 0
 
 
 class DuelBot:
     duelBotList = []
 
-    def __init__(self, name):
+    def __init__(self, name, attack_time):
         self.bot = mineflayer.createBot({
             'host': '127.0.0.1',
             'port': sys.argv[1],
@@ -104,14 +121,18 @@ class DuelBot:
         })
         self.target_entity = None
         self.target_mode = False
-        self.thread = None
         self.duelBotList.append(self)
         self.botTargetIndex = -1
+        self.attackTime = attack_time
+        self.last_hit = False
+        self.wtap = False
+        self.target_last_position = None
 
         @On(self.bot, 'spawn')
         def handle(*args):
-            print("I spawned 👋")
+            print(self.bot.username + " spawned")
             self.endAttack()
+            print(self.bot.entity.position)
 
         @On(self.bot, 'chat')
         def handle_msg(this, sender, message, *args):
@@ -132,8 +153,23 @@ class DuelBot:
         @On(self.bot, 'entityHurt')
         def handle_entity_hurt(this, entity):
             if entity.id == self.bot.entity.id:
-                self.target_entity = self.bot.nearestEntity()
-                self.startAttack()
+                self.last_hit = False
+                if not self.target_mode:
+                    self.target_entity = self.bot.nearestEntity()
+                    self.startAttack()
+            elif self.target_mode and self.target_entity is not None:
+                if entity.id == self.target_entity.id:
+                    self.last_hit = True
+                    self.bot.setControlState('forward', False)
+                    self.bot.setControlState('sprint', False)
+                    self.bot.setControlState('forward', True)
+                    self.bot.setControlState('sprint', True)
+                    if not self.bot.getControlState('right'):
+                        self.bot.setControlState('right', True)
+                        self.bot.setControlState('left', False)
+                    else:
+                        self.bot.setControlState('right', False)
+                        self.bot.setControlState('left', True)
 
         @On(self.bot, 'entitySpawn')
         def handle_entity_dead(this, entity):
@@ -175,7 +211,7 @@ class DuelBot:
             else:
                 look_x = bot_position.x
 
-            if z_difference < -2 * half_player_width:
+            if z_difference < -half_player_width:
                 look_z = target_position.z + half_player_width
             elif z_difference > half_player_width:
                 look_z = target_position.z - half_player_width
@@ -192,6 +228,9 @@ class DuelBot:
         self.target_mode = False
         self.bot.setControlState('forward', False)
         self.bot.setControlState('sprint', False)
+        self.bot.setControlState('left', False)
+        self.bot.setControlState('right', False)
+        self.bot.setControlState('jump', False)
         if 0 <= self.botTargetIndex < len(self.duelBotList):
             target_bot = self.duelBotList[self.botTargetIndex]
             if target_bot.target_mode:
@@ -212,23 +251,58 @@ class DuelBot:
         while self.target_mode and self.bot.entities[self.target_entity.id] is not None:
             self.face(self.target_entity)
             self.punch()
-            time.sleep(0.05)
-        if self.target_mode:
-            self.endAttack()
+            distance = getDistance(self.target_entity['position'], self.bot.entity['position'])
+            target_velocity = v(0, 0, 0)
+            if self.target_last_position is not None:
+                target_velocity = getDifference(self.target_entity['position'], self.target_last_position)
+            target_move_distance = getDistance(sumVec(self.target_entity['position'], target_velocity),
+                                               self.bot.entity['position'])
+            self_move_distance = getDistance(self.target_entity['position'],
+                                             sumVec(self.bot.entity['position'], self.bot.entity['velocity']))
+            target_move_distance_change = target_move_distance - distance
+            self_move_distance_change = self_move_distance - distance
+            self.target_last_position = self.target_entity['position']
+            if distance > 8:
+                self.bot.setControlState('jump', True)
+                self.bot.setControlState('left', False)
+                self.bot.setControlState('right', False)
+            elif self.last_hit and self_move_distance_change <= 0.05 \
+                    and distance < 4:
+                self.bot.setControlState('forward', False)
+                self.bot.setControlState('left', False)
+                self.bot.setControlState('right', False)
+                self.bot.setControlState('jump', False)
+                self.wtap = True
+            else:
+                if not self.last_hit or distance > 6:
+                    self.wtap = False
+                self.bot.setControlState('jump', False)
+                self.bot.setControlState('forward', True)
+                if not (self.wtap or self.bot.getControlState('left') or self.bot.getControlState('right')):
+                    if random.randint(0, 1) == 1:
+                        self.bot.setControlState('left', True)
+                    else:
+                        self.bot.setControlState('right', True)
+            if self.attackTime > 0:
+                time.sleep(self.attackTime)
+        self.endAttack()
 
     def startAttack(self):
         if self.target_mode:
             return
         self.target_mode = True
+        self.bot.setControlState('right', True)
         self.bot.setControlState('forward', True)
         self.bot.setControlState('sprint', True)
-        self.thread = threading.Thread(target=self.attackCycle)
-        self.thread.start()
+        print('target')
+        print(self.target_entity['position'])
+        thread = threading.Thread(target=self.attackCycle)
+        thread.start()
 
     def targetMode(self, target_mode):
         self.target_mode = target_mode
 
 
 print("Started mineflayer")
-bot1 = DuelBot(name="pyt")
-bot2 = DuelBot(name="hon")
+bot1 = DuelBot(name="pyt", attack_time=0.05)
+bot2 = DuelBot(name="hon", attack_time=0.2)
