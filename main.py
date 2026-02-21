@@ -16,23 +16,21 @@ v = require('vec3')
 
 
 class ActionState:
-    walk_forwards = False
-    walk_left = False
-    walk_backwards = False
-    walk_right = False
-    jump = False
-    sneak = False
-    sprint = False
-    facing_yaw_change = 0.0
-    facing_pitch_change = 0.0
-    left_click = False
-    old_left_click = False
-    right_click = False
-    old_right_click = False
-    slot = 0
-    old_slot = 0
 
-    def executeTimeStep(self, bot):
+    def __init__(self, init_vector):
+        self.walk_forwards, self.walk_left, self.walk_backwards, self.walk_right, self.jump, self.sneak, \
+            self.sprint, self.facing_yaw_change, self.facing_pitch_change, self.left_click, self.old_left_click, \
+            self.right_click, self.old_right_click, self.slot, self.old_slot = init_vector
+
+    def change_state(self, new_state):
+        self.old_right_click = self.right_click
+        self.old_left_click = self.left_click
+        self.old_slot = self.slot
+        self.walk_forwards, self.walk_left, self.walk_backwards, self.walk_right, self.jump, self.sneak, \
+            self.sprint, self.facing_yaw_change, self.facing_pitch_change, self.left_click, \
+            self.right_click, self.slot = new_state
+
+    def execute_time_step(self, bot):
         bot.setControlState('forward', self.walk_forwards)
         bot.setControlState('left', self.walk_left)
         bot.setControlState('backward', self.walk_backwards)
@@ -40,9 +38,9 @@ class ActionState:
         bot.setControlState('jump', self.jump)
         bot.setControlState('sneak', self.sneak)
         bot.setControlState('sprint', self.sprint)
-        yaw_change = bot.entity.yaw + self.facing_yaw_change
-        pitch_change = bot.entity.pitch + self.facing_pitch_change
-        bot.look(yaw_change, pitch_change)
+        new_yaw = bot.entity.yaw + self.facing_yaw_change
+        new_pitch = bot.entity.pitch + self.facing_pitch_change
+        bot.look(new_yaw, new_pitch)
         bot.setQuickBarSlot(self.slot)
         if self.left_click:
             bot.swingArm()
@@ -73,6 +71,12 @@ class ActionState:
                 self.old_right_click = False
                 if self.old_slot == self.slot:
                     bot.deactivateItem()
+
+
+class EnvironmentState:
+    def __init__(self, init_vector):
+        self.my_x, self.my_y, self.my_z, self.my_yaw, self.my_pitch, \
+            self.opponent_x, self.opponent_y, self.opponent_z, self.opponent_yaw, self.opponent_pitch = init_vector
 
 
 def startDiggingIfCan(bot):
